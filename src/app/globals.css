@@ -1,26 +1,41 @@
+/*
+ * Palette (Jenny Henderson studio): Midnight #013D5A, Lionsmane #FCF3E3 (primary);
+ * Celeste #BDD3CE, Herb #708C69, Marigold #F4A258 (secondary).
+ * Text-coloured variants of Herb and Marigold are darkened so badges meet WCAG AA on cream.
+ */
 :root {
-  --bg: #f7f6f2;
-  --surface: #ffffff;
-  --surface-2: #f0eee8;
-  --text: #1c1b18;
-  --muted: #5f5c54;
-  --border: #dedbd2;
-  --accent: #2f4fd8;
-  --accent-text: #ffffff;
-  --focus: #2f4fd8;
-  --easy: #1f7a4d;
-  --moderate: #9a6400;
-  --hard: #b3261e;
-  --gated: #6b3fa0;
-  --unknown: #5f5c54;
-  --ev-tested: #1f7a4d;
-  --ev-sourced: #2f4fd8;
-  --ev-estimate: #9a6400;
-  --ev-inference: #6b3fa0;
-  --ev-unknown: #5f5c54;
-  --warn-bg: #fff4d6;
-  --warn-border: #e8c46a;
-  --danger-bg: #fde8e6;
+  --midnight: #013d5a;
+  --lionsmane: #fcf3e3;
+  --celeste: #bdd3ce;
+  --herb: #708c69;
+  --marigold: #f4a258;
+
+  --bg: var(--lionsmane);
+  --surface: #fffaf1;
+  --surface-2: #eef4f2; /* Celeste tint */
+  --text: var(--midnight);
+  --muted: #3f6274;
+  --border: #e4d8c2;
+  --accent: var(--midnight);
+  --accent-text: var(--lionsmane);
+  --focus: #b85f17;
+  --header-bg: var(--midnight);
+  --header-text: var(--lionsmane);
+  --header-muted: var(--celeste);
+  --easy: #4a6744; /* Herb, darkened */
+  --moderate: #9c5a12; /* Marigold, darkened */
+  --hard: #a33a24;
+  --gated: #5b4a86;
+  --unknown: #3f6274;
+  --ev-tested: #4a6744;
+  --ev-sourced: var(--midnight);
+  --ev-estimate: #9c5a12;
+  --ev-inference: #5b4a86;
+  --ev-unknown: #3f6274;
+  --warn-bg: #fde4c8; /* Marigold tint */
+  --warn-border: var(--marigold);
+  --danger-bg: #f9e0d8;
+  --rec-border: var(--herb);
   --radius: 10px;
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -29,28 +44,32 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15140f;
-    --surface: #1e1d18;
-    --surface-2: #26251f;
-    --text: #ecebe6;
-    --muted: #aaa79d;
-    --border: #3a3830;
-    --accent: #8ea2ff;
-    --accent-text: #10131f;
-    --focus: #8ea2ff;
-    --easy: #5fcf95;
-    --moderate: #f0b54a;
-    --hard: #ff8a80;
-    --gated: #c39bf0;
-    --unknown: #aaa79d;
-    --ev-tested: #5fcf95;
-    --ev-sourced: #8ea2ff;
-    --ev-estimate: #f0b54a;
-    --ev-inference: #c39bf0;
-    --ev-unknown: #aaa79d;
-    --warn-bg: #3a2f12;
-    --warn-border: #7a6122;
-    --danger-bg: #3d1a17;
+    --bg: #01273a;
+    --surface: var(--midnight);
+    --surface-2: #0b4a68;
+    --text: var(--lionsmane);
+    --muted: var(--celeste);
+    --border: #1d5a78;
+    --accent: var(--marigold);
+    --accent-text: #01273a;
+    --focus: var(--marigold);
+    --header-bg: #011d2b;
+    --header-text: var(--lionsmane);
+    --header-muted: var(--celeste);
+    --easy: #a9c4a1;
+    --moderate: var(--marigold);
+    --hard: #f2a08e;
+    --gated: #c7b8ef;
+    --unknown: var(--celeste);
+    --ev-tested: #a9c4a1;
+    --ev-sourced: var(--celeste);
+    --ev-estimate: var(--marigold);
+    --ev-inference: #c7b8ef;
+    --ev-unknown: var(--celeste);
+    --warn-bg: #4a3417;
+    --warn-border: #a8692b;
+    --danger-bg: #4a2219;
+    --rec-border: var(--herb);
     color-scheme: dark;
   }
 }
@@ -120,8 +139,9 @@ h3 {
 }
 
 .site-header {
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--header-bg);
+  color: var(--header-text);
+  border-bottom: 4px solid var(--marigold);
 }
 .header-inner {
   display: flex;
@@ -133,12 +153,12 @@ h3 {
 }
 .brand {
   font-weight: 700;
-  color: var(--text);
+  color: var(--header-text);
   text-decoration: none;
   font-size: 1.05rem;
 }
 .brand-mark {
-  color: var(--accent);
+  color: var(--marigold);
 }
 .site-header nav {
   display: flex;
@@ -146,13 +166,13 @@ h3 {
   flex-wrap: wrap;
 }
 .site-header nav a {
-  color: var(--muted);
+  color: var(--header-muted);
   text-decoration: none;
   font-size: 0.95rem;
   padding: 6px 0;
 }
 .site-header nav a:hover {
-  color: var(--text);
+  color: var(--marigold);
 }
 main {
   padding-top: 24px;
@@ -302,7 +322,8 @@ main {
   transition: border-color 0.15s;
 }
 .card:hover {
-  border-color: var(--accent);
+  border-color: var(--marigold);
+  box-shadow: 0 2px 0 var(--celeste);
 }
 .card h3 {
   display: flex;
@@ -472,8 +493,9 @@ main {
   width: 30px;
   height: 30px;
   border-radius: 50%;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--celeste);
+  color: var(--midnight);
+  border: 1px solid var(--celeste);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -521,7 +543,7 @@ main {
   flex: none;
 }
 .recommend {
-  border-left: 4px solid var(--accent);
+  border-left: 4px solid var(--rec-border);
 }
 .toggles {
   display: grid;
