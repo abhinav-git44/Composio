@@ -14,6 +14,29 @@ export interface FetchedPage {
   url: string; // final URL after redirects
   title: string;
   text: string;
+  /** Absolute http(s) links found on the page, with their anchor text. */
+  links?: { url: string; text: string }[];
+}
+
+export function extractLinks(html: string, base: string): { url: string; text: string }[] {
+  const out: { url: string; text: string }[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b[^>]*href\s*=\s*["']([^"'#][^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) && out.length < 400) {
+    try {
+      const u = new URL(m[1], base);
+      if (u.protocol !== "https:" && u.protocol !== "http:") continue;
+      u.hash = "";
+      const key = u.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ url: key, text: m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) });
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
 }
 
 export class FetchBlockedError extends Error {}
@@ -159,9 +182,15 @@ export async function safeFetch(
     const ctype = res.headers.get("content-type") ?? "";
     if (ctype && !/text\/html|text\/plain|application\/xhtml/i.test(ctype)) throw new Error(`unsupported content type ${ctype.split(";")[0]}`);
     const body = await readCapped(res);
-    const { title, text } = /text\/plain/i.test(ctype) ? { title: "", text: body } : htmlToText(body);
+    const isPlain = /text\/plain/i.test(ctype);
+    const { title, text } = isPlain ? { title: "", text: body } : htmlToText(body);
     if (text.length < 200) throw new Error("page has almost no text (may need JavaScript)");
-    return { url: url.toString(), title: title || url.hostname, text: text.slice(0, opts.maxChars ?? 14_000) };
+    return {
+      url: url.toString(),
+      title: title || url.hostname,
+      text: text.slice(0, opts.maxChars ?? 14_000),
+      links: isPlain ? [] : extractLinks(body, url.toString()),
+    };
   }
   throw new Error("too many redirects");
 }

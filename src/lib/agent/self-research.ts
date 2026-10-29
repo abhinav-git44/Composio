@@ -112,6 +112,45 @@ export function rankUrls(urls: string[], officialDomains: string[]): string[] {
     .map((x) => x.u);
 }
 
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+}
+
+const RELEVANT = /oauth|authori[sz]|auth\b|app|integration|review|publish|marketplace|directory|listing|scope|rate.?limit|develop|partner|verif|client|token|webhook|api/i;
+
+/** Same-site links from downloaded pages that look relevant to OAuth setup or review. */
+export function discoverLinks(pages: FetchedPage[], officialDomains: string[], exclude: Set<string>, limit: number): string[] {
+  const off = officialDomains.map((d) => d.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""));
+  const scored: { url: string; score: number }[] = [];
+  for (const p of pages) {
+    const ph = hostOf(p.url);
+    for (const l of p.links ?? []) {
+      const h = hostOf(l.url);
+      const sameSite = h === ph || off.some((d) => h === d || h.endsWith(`.${d}`));
+      if (!sameSite || exclude.has(l.url) || /\.(png|jpe?g|gif|svg|pdf|zip|mp4)$/i.test(l.url)) continue;
+      const hay = `${l.url} ${l.text}`;
+      let score = 0;
+      if (/oauth|authori[sz]/i.test(hay)) score += 5;
+      if (/review|publish|marketplace|directory|listing|verif|partner/i.test(hay)) score += 4;
+      if (/scope|rate.?limit|token/i.test(hay)) score += 2;
+      if (RELEVANT.test(hay)) score += 1;
+      if (score > 1) scored.push({ url: l.url, score });
+    }
+  }
+  const seen = new Set<string>();
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .filter((x) => !seen.has(x.url) && seen.add(x.url))
+    .slice(0, limit)
+    .map((x) => x.url);
+}
+
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
@@ -143,20 +182,43 @@ export async function runSelfResearch(
   let modelIdx = 0;
   const failures: string[] = [];
 
-  /** Calls the model, moving to the next model on quota/access errors. */
+  /**
+   * Calls the model. Temporary overload: retry the same model with backoff. Schema rejected
+   * ("invalid argument"): retry without the response schema, putting it in the prompt instead
+   * (Zod still validates the output). Quota/access errors: move to the next model.
+   */
   async function call(contents: string, config: Record<string, unknown>): Promise<GeminiResponse | Err> {
+    let transientRetries = 0;
+    let cfg = config;
+    let text = contents;
     for (;;) {
       const m = models[modelIdx];
       try {
-        return await ai.models.generateContent({ model: m, contents, config: { ...config, abortSignal: signal } });
+        return await ai.models.generateContent({ model: m, contents: text, config: { ...cfg, abortSignal: signal } });
       } catch (e) {
         const err = errorFrom(e);
-        failures.push(`${m}: ${err.detail || err.code}`);
         console.error(`gemini call failed on ${m}: ${err.detail}`);
+        if (err.code === "provider_unavailable" && transientRetries < 2) {
+          transientRetries++;
+          emit({ type: "status", message: `${m} is busy; retrying in ${transientRetries * 4}s…` });
+          await sleep(transientRetries * 4000, signal);
+          continue;
+        }
+        if (cfg.responseJsonSchema && /invalid argument|schema/i.test(err.detail)) {
+          emit({ type: "status", message: `${m} rejected the strict JSON schema; retrying with the schema in the prompt…` });
+          text = `${contents}\n\nReturn JSON matching this JSON Schema exactly:\n${JSON.stringify(cfg.responseJsonSchema)}`;
+          // Some models also reject large output budgets with the same error.
+          cfg = { ...cfg, responseJsonSchema: undefined, maxOutputTokens: Math.min(Number(cfg.maxOutputTokens) || 8192, 8192) };
+          continue;
+        }
+        failures.push(`${m}: ${err.detail || err.code}`);
         if (err.code === "auth" || err.code === "timeout" || modelIdx + 1 >= models.length) {
           return { ...err, detail: failures.join(" | ").slice(0, 600) };
         }
         modelIdx++;
+        transientRetries = 0;
+        cfg = config;
+        text = contents;
         emit({ type: "status", message: `${m} unavailable (${err.code}); trying ${models[modelIdx]}…` });
       }
     }
@@ -184,14 +246,21 @@ export async function runSelfResearch(
   const queries = [...plan.searchQueries.slice(0, 4), `site:docs.composio.dev ${plan.appName}`];
   const searches: string[] = [];
   const hits: SearchHit[] = [];
+  let blockedSearches = 0;
   for (const q of queries) {
     if (signal?.aborted) break;
     emit({ type: "search", query: q });
     searches.push(q);
     const r = await search(q, { signal, limit: 6 });
     emit({ type: "search_results", count: r.hits.length });
-    if (r.error && !r.hits.length) emit({ type: "status", message: `Search returned nothing (${r.error.slice(0, 120)})` });
     hits.push(...r.hits);
+    if (r.error && !r.hits.length) {
+      emit({ type: "status", message: `Search returned nothing (${r.error.slice(0, 120)})` });
+      if (/403|429|blocked/i.test(r.error) && ++blockedSearches >= 2) {
+        emit({ type: "status", message: "Search engines are blocking this server; continuing with official-doc URLs and link discovery." });
+        break;
+      }
+    }
   }
 
   // ---- 3. fetch ----
@@ -201,7 +270,7 @@ export async function runSelfResearch(
   ).slice(0, MAX_PAGES);
   const fetches: { url: string; ok: boolean; error?: string }[] = [];
   const pages: (FetchedPage & { requested: string })[] = [];
-  await pool(toFetch, 4, async (u) => {
+  const fetchAll = (urls: string[]) => pool(urls, 4, async (u) => {
     emit({ type: "fetch", url: u });
     try {
       const p = await fetchPage(u, signal);
@@ -214,6 +283,18 @@ export async function runSelfResearch(
       emit({ type: "fetch_result", url: u, ok: false, error });
     }
   });
+  await fetchAll(toFetch);
+
+  // Follow relevant same-site links from what we downloaded (keyless discovery when search is blocked).
+  const room = MAX_PAGES + 4 - pages.length;
+  if (pages.length && room > 0) {
+    const tried = new Set([...toFetch, ...pages.map((p) => p.url)]);
+    const more = discoverLinks(pages, [...plan.officialDomains, ...(query.kind === "url" ? [query.host] : [])], tried, Math.min(room, 5));
+    if (more.length) {
+      emit({ type: "status", message: `Following ${more.length} relevant links from the official docs…` });
+      await fetchAll(more);
+    }
+  }
   if (!pages.length) {
     return {
       kind: "error",

@@ -130,3 +130,51 @@ describe("runSelfResearch", () => {
     expect((await runSelfResearch(ai, q("TestApp"), { emit: () => {}, deps })).kind).toBe("guide");
   });
 });
+
+describe("runSelfResearch resilience", () => {
+  it("retries a busy model, then drops the strict schema if the model rejects it", async () => {
+    const busy = () => Object.assign(new Error('{"error":{"message":"This model is currently experiencing high demand."}}'), { status: 503 });
+    const invalid = Object.assign(new Error('{"error":{"message":"Request contains an invalid argument."}}'), { status: 400 });
+    const { ai, calls } = fake([{ text: plan() }, busy(), invalid, { text: JSON.stringify(makeDraft()) }]);
+    const out = await runSelfResearch(ai, q("TestApp"), { emit: () => {}, deps, models: ["m1"] });
+    expect(out.kind).toBe("guide");
+    expect(calls[2].config?.responseJsonSchema).toBeTruthy();
+    expect(calls[3].config?.responseJsonSchema).toBeUndefined();
+    expect(calls[3].config?.maxOutputTokens).toBe(8192);
+    expect(calls[3].contents).toContain("Return JSON matching this JSON Schema");
+  }, 20000);
+
+  it("discovers relevant same-site links when search is blocked", async () => {
+    const fetched: string[] = [];
+    const blockedSearch = async () => ({ hits: [], engine: "none", error: "duckduckgo: HTTP 403; mojeek: HTTP 403" });
+    const { ai, calls } = fake([{ text: plan({ candidateUrls: ["https://docs.testapp.example.org/start"] }) }, { text: JSON.stringify(makeDraft()) }]);
+    const out = await runSelfResearch(ai, q("TestApp"), {
+      emit: () => {},
+      deps: {
+        search: blockedSearch,
+        fetchPage: async (u) => {
+          fetched.push(u);
+          return {
+            url: u,
+            title: "t",
+            text: "x".repeat(300),
+            links: [
+              { url: "https://docs.testapp.example.org/oauth-apps", text: "OAuth apps" },
+              { url: "https://docs.testapp.example.org/marketplace-review", text: "Marketplace review" },
+              { url: "https://evil.example.net/oauth", text: "OAuth elsewhere" },
+              { url: "https://docs.testapp.example.org/careers", text: "Careers" },
+            ],
+          };
+        },
+      },
+    });
+    expect(out.kind).toBe("guide");
+    expect(fetched).toContain("https://docs.testapp.example.org/oauth-apps");
+    expect(fetched).toContain("https://docs.testapp.example.org/marketplace-review");
+    expect(fetched).not.toContain("https://evil.example.net/oauth");
+    expect(fetched).not.toContain("https://docs.testapp.example.org/careers");
+    // Stops searching after two blocked queries.
+    if (out.kind === "guide") expect(out.searches).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+  });
+});
