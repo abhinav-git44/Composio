@@ -153,17 +153,50 @@ describe("runGeminiAgent", () => {
     expect(await runGeminiAgent(bad.ai, q("TestApp"), { emit: () => {}, fetchImpl: fakeFetch })).toMatchObject({ kind: "error", code: "malformed_output" });
   });
 
-  it("maps provider errors", async () => {
-    const cases: [Error, string][] = [
-      [Object.assign(new Error("API key not valid. Please pass a valid API key."), { status: 400 }), "auth"],
-      [Object.assign(new Error("RESOURCE_EXHAUSTED"), { status: 429 }), "rate_limited"],
-      [Object.assign(new Error("internal"), { status: 503 }), "provider_unavailable"],
-      [Object.assign(new Error("aborted"), { name: "AbortError" }), "timeout"],
+  it("maps provider errors, falling back across research models first", async () => {
+    const quota = () => Object.assign(new Error('{"error":{"code":429,"message":"Quota exceeded for metric: generate_content_free_tier_requests, limit: 0","status":"RESOURCE_EXHAUSTED"}}'), { status: 429 });
+    const cases: [Error[], string][] = [
+      [[Object.assign(new Error("API key not valid. Please pass a valid API key."), { status: 400 })], "auth"],
+      [[quota(), quota()], "rate_limited"],
+      [[Object.assign(new Error("internal"), { status: 503 }), Object.assign(new Error("internal"), { status: 503 })], "provider_unavailable"],
+      [[Object.assign(new Error("aborted"), { name: "AbortError" })], "timeout"],
     ];
-    for (const [err, code] of cases) {
-      const { ai } = fake([err]);
-      expect(await runGeminiAgent(ai, q("TestApp"), { emit: () => {}, fetchImpl: fakeFetch })).toMatchObject({ kind: "error", code });
+    for (const [errs, code] of cases) {
+      const { ai, calls } = fake(errs);
+      const out = await runGeminiAgent(ai, q("TestApp"), { emit: () => {}, fetchImpl: fakeFetch });
+      expect(out).toMatchObject({ kind: "error", code });
+      // Auth and timeout stop immediately; others try every research model.
+      expect(calls).toHaveLength(code === "auth" || code === "timeout" ? 1 : 2);
     }
+  });
+
+  it("surfaces the provider's own error text (without secrets) when every model fails", async () => {
+    const err = () => Object.assign(new Error('{"error":{"message":"Quota exceeded, limit: 0 https://x/?key=SECRET123"}}'), { status: 429 });
+    const out = await runGeminiAgent(fake([err(), err()]).ai, q("TestApp"), { emit: () => {}, fetchImpl: fakeFetch });
+    if (out.kind !== "error") throw new Error("expected error");
+    expect(out.detail).toContain("gemini-2.5-flash: Quota exceeded, limit: 0");
+    expect(out.detail).toContain("gemini-2.5-flash-lite:");
+    expect(out.detail).not.toContain("SECRET123");
+  });
+
+  it("falls back to the next research model when the first has no free quota", async () => {
+    const quota = Object.assign(new Error("RESOURCE_EXHAUSTED limit: 0"), { status: 429 });
+    const { ai, calls } = fake([quota, researchResponse("STATUS: FOUND\n- x"), { text: JSON.stringify(makeDraft()) }]);
+    const out = await runGeminiAgent(ai, q("TestApp"), { emit: () => {}, model: "gemini-3.8-flash", fetchImpl: fakeFetch });
+    expect(out.kind).toBe("guide");
+    expect(calls.map((c) => c.model)).toEqual(["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.8-flash"]);
+    if (out.kind === "guide") expect(out.model).toBe("gemini-2.5-flash-lite (research) + gemini-3.8-flash (structuring)");
+  });
+
+  it("falls back to the research model for structuring if the structuring model is unavailable", async () => {
+    const { ai, calls } = fake([
+      researchResponse("STATUS: FOUND\n- x"),
+      Object.assign(new Error("model not found"), { status: 404 }),
+      { text: JSON.stringify(makeDraft()) },
+    ]);
+    const out = await runGeminiAgent(ai, q("TestApp"), { emit: () => {}, model: "gemini-3.8-flash", fetchImpl: fakeFetch });
+    expect(out.kind).toBe("guide");
+    expect(calls.map((c) => c.model)).toEqual(["gemini-2.5-flash", "gemini-3.8-flash", "gemini-2.5-flash"]);
   });
 
   it("handles blocked prompts and empty notes", async () => {

@@ -126,7 +126,7 @@ export function LibraryClient({
               return;
             case "error":
               finished = true;
-              setError(ERROR_TEXT[String(ev.code)] ?? String(ev.message));
+              setError(`${ERROR_TEXT[String(ev.code)] ?? String(ev.message)}${ev.detail ? ` Provider said: ${String(ev.detail)}` : ""}`);
               return;
           }
         }

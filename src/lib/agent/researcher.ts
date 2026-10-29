@@ -40,7 +40,15 @@ export function anthropicResearcher(client: ModelClient, model = process.env.ANT
 }
 
 export function geminiResearcher(ai: GeminiLike, model = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, fetchImpl?: typeof fetch): Researcher {
-  return { provider: "gemini", model, run: (q, o) => runGeminiAgent(ai, q, { ...o, model, fetchImpl }) };
+  const researchModels = (process.env.GEMINI_RESEARCH_MODELS ?? "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  return {
+    provider: "gemini",
+    model,
+    run: (q, o) => runGeminiAgent(ai, q, { ...o, model, researchModels: researchModels.length ? researchModels : undefined, fetchImpl }),
+  };
 }
 
 export function getResearcher(): Researcher | null {

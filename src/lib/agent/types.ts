@@ -38,6 +38,8 @@ export type AgentOutcome =
   | {
       kind: "guide";
       draft: GuideDraft;
+      /** Model(s) actually used, when the backend picks among several. */
+      model?: string;
       fetched: string[];
       searched: string[];
       searches: string[];
@@ -45,4 +47,4 @@ export type AgentOutcome =
     }
   | { kind: "ambiguous"; report: AmbiguousReport }
   | { kind: "not_found"; reason: string }
-  | { kind: "error"; code: AgentErrorCode; message: string };
+  | { kind: "error"; code: AgentErrorCode; message: string; detail?: string };

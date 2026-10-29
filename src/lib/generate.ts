@@ -18,7 +18,7 @@ export type GenerateResult =
   | { kind: "guide"; slug: string; cached: boolean }
   | { kind: "ambiguous"; report: AmbiguousReport }
   | { kind: "not_found"; reason: string }
-  | { kind: "error"; code: AgentErrorCode | "store_failed"; message: string };
+  | { kind: "error"; code: AgentErrorCode | "store_failed"; message: string; detail?: string };
 
 export async function generateGuide(
   query: Extract<ParsedQuery, { ok: true }>,
@@ -58,7 +58,7 @@ export async function generateGuide(
     query: query.value,
     sources,
     research: {
-      model: researcher.model,
+      model: outcome.model ?? researcher.model,
       searches: outcome.searches,
       fetches: outcome.fetches,
       searchResultUrls: new Set(outcome.searched).size,

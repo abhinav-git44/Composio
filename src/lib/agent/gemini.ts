@@ -15,7 +15,14 @@ import type { AgentErrorCode, AgentEvent, AgentOutcome } from "./types";
  *   citing only source ids from the ledger. Output is validated with Zod and repaired once.
  */
 
+/** Model that turns notes into JSON (no tools needed; free tier). */
 export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+/**
+ * Research models, tried in order. Google's pricing page (checked 2026-10-29) lists Grounding with
+ * Google Search as free only for Gemini 2.5 Flash / Flash-Lite ("up to 500 RPD", shared); for
+ * Gemini 3.x it is "Not available" on the free tier.
+ */
+export const DEFAULT_RESEARCH_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
 /** Minimal surface of @google/genai we use, so tests can inject a fake. */
 export interface GeminiLike {
@@ -98,20 +105,38 @@ const STRUCTURE_INSTRUCTIONS = `${SYSTEM_PROMPT}
 You are given research notes and a numbered list of RETRIEVED SOURCES. Cite only those source ids. In "sources", include exactly the entries you cite, copying id, url and title from the list and setting publisher (provider / composio / third-party).
 A fact that appears in the notes without one of the retrieved URLs is "inference", not "sourced". Never use "tested". The approval wait must be "sourced" from a retrieved provider page, or "unknown".`;
 
-function errorFrom(e: unknown): { code: AgentErrorCode; message: string } {
+type GeminiError = { code: AgentErrorCode; message: string; detail: string };
+
+/** Short, key-free summary of the provider's own error text, for logs and the UI. */
+function providerDetail(msg: string): string {
+  let m = msg;
+  try {
+    const j = JSON.parse(msg.slice(msg.indexOf("{")));
+    m = j?.error?.message ?? m;
+  } catch {
+    /* not JSON */
+  }
+  return m.replace(/key=[^&\s]+/gi, "key=REDACTED").replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function errorFrom(e: unknown): GeminiError {
   const err = e as { status?: number; name?: string; message?: string };
   const msg = err?.message ?? "";
-  if (err?.name === "AbortError" || /aborted|timed? ?out/i.test(msg)) return { code: "timeout", message: "Research took too long and was stopped." };
-  if (err?.status === 401 || err?.status === 403 || /API key not valid|API_KEY_INVALID|PERMISSION_DENIED/i.test(msg)) {
-    return { code: "auth", message: "The AI provider rejected the API key." };
+  const detail = providerDetail(msg);
+  if (err?.name === "AbortError" || /aborted|timed? ?out/i.test(msg)) return { code: "timeout", message: "Research took too long and was stopped.", detail };
+  if (err?.status === 401 || /API key not valid|API_KEY_INVALID/i.test(msg)) {
+    return { code: "auth", message: "The AI provider rejected the API key.", detail };
   }
   if (err?.status === 429 || /RESOURCE_EXHAUSTED|quota/i.test(msg)) {
-    return { code: "rate_limited", message: "The free AI quota is used up for now. Try again later." };
+    return { code: "rate_limited", message: "The free AI quota is used up for now. Try again later.", detail };
   }
-  if ((err?.status ?? 0) >= 500) return { code: "provider_unavailable", message: "The AI provider is temporarily unavailable. Try again shortly." };
-  if (err?.status === 400) return { code: "provider_error", message: "The AI provider rejected the request." };
-  return { code: "provider_error", message: "The research agent failed unexpectedly." };
+  if ((err?.status ?? 0) >= 500) return { code: "provider_unavailable", message: "The AI provider is temporarily unavailable. Try again shortly.", detail };
+  if (err?.status === 400 || err?.status === 403 || err?.status === 404) return { code: "provider_error", message: "The AI provider rejected the request.", detail };
+  return { code: "provider_error", message: "The research agent failed unexpectedly.", detail };
 }
+
+/** Auth failures and timeouts won't be fixed by another model; quota, access and 5xx might. */
+const tryNext = (e: GeminiError) => e.code !== "auth" && e.code !== "timeout";
 
 function issues(err: z.ZodError) {
   return err.issues
@@ -133,29 +158,51 @@ function parseJson(text: string | undefined): unknown {
 export async function runGeminiAgent(
   ai: GeminiLike,
   query: Extract<ParsedQuery, { ok: true }>,
-  opts: { emit: (e: AgentEvent) => void; signal?: AbortSignal; model?: string; fetchImpl?: typeof fetch },
+  opts: {
+    emit: (e: AgentEvent) => void;
+    signal?: AbortSignal;
+    model?: string;
+    researchModels?: string[];
+    fetchImpl?: typeof fetch;
+  },
 ): Promise<AgentOutcome> {
   const { emit } = opts;
   const model = opts.model ?? DEFAULT_GEMINI_MODEL;
+  const researchModels = opts.researchModels?.length ? opts.researchModels : DEFAULT_RESEARCH_MODELS;
   const subject = query.kind === "url" ? `the app at this website: ${query.value}` : `the app named "${query.value}"`;
   const today = new Date().toISOString().slice(0, 10);
 
   // ---- Phase 1: research ----
   emit({ type: "status", message: `Searching the web and reading ${query.display}'s developer docs…` });
-  let research: GeminiResponse;
-  try {
-    research = await ai.models.generateContent({
-      model,
-      contents: `Research how a developer registers their own OAuth app for ${subject} and gets it approved for production. Today is ${today}. Composio docs: https://docs.composio.dev/toolkits`,
-      config: {
-        systemInstruction: RESEARCH_INSTRUCTIONS,
-        tools: [{ googleSearch: {} }, { urlContext: {} }],
-        abortSignal: opts.signal,
-        maxOutputTokens: 8000,
-      },
-    });
-  } catch (e) {
-    return { kind: "error", ...errorFrom(e) };
+  let research: GeminiResponse | undefined;
+  let researchModel = "";
+  const failures: string[] = [];
+  let lastError: GeminiError | undefined;
+  for (const m of researchModels) {
+    try {
+      research = await ai.models.generateContent({
+        model: m,
+        contents: `Research how a developer registers their own OAuth app for ${subject} and gets it approved for production. Today is ${today}. Composio docs: https://docs.composio.dev/toolkits`,
+        config: {
+          systemInstruction: RESEARCH_INSTRUCTIONS,
+          tools: [{ googleSearch: {} }, { urlContext: {} }],
+          abortSignal: opts.signal,
+          maxOutputTokens: 8000,
+        },
+      });
+      researchModel = m;
+      break;
+    } catch (e) {
+      lastError = errorFrom(e);
+      failures.push(`${m}: ${lastError.detail || lastError.code}`);
+      console.error(`gemini research failed on ${m}: ${lastError.detail}`);
+      if (!tryNext(lastError)) break;
+      emit({ type: "status", message: `${m} unavailable (${lastError.code}); trying another model…` });
+    }
+  }
+  if (!research) {
+    const e = lastError ?? { code: "provider_error" as const, message: "No research model succeeded.", detail: "" };
+    return { kind: "error", code: e.code, message: e.message, detail: failures.join(" | ").slice(0, 600) };
   }
   if (research.promptFeedback?.blockReason) {
     return { kind: "error", code: "refused", message: "The model declined to research this request." };
@@ -207,11 +254,13 @@ export async function runGeminiAgent(
     isAmbiguous ? "Return the ambiguity report JSON (reason + 2–5 candidates)." : "Return the guide JSON."
   }`;
   let prompt = base;
+  const structureModels = [...new Set([model, researchModel])];
+  let sIdx = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     let res: GeminiResponse;
     try {
       res = await ai.models.generateContent({
-        model,
+        model: structureModels[sIdx],
         contents: prompt,
         config: {
           systemInstruction: STRUCTURE_INSTRUCTIONS,
@@ -222,7 +271,14 @@ export async function runGeminiAgent(
         },
       });
     } catch (e) {
-      return { kind: "error", ...errorFrom(e) };
+      const err = errorFrom(e);
+      console.error(`gemini structuring failed on ${structureModels[sIdx]}: ${err.detail}`);
+      if (tryNext(err) && sIdx + 1 < structureModels.length) {
+        sIdx++;
+        attempt--;
+        continue;
+      }
+      return { kind: "error", code: err.code, message: err.message, detail: `${structureModels[sIdx]}: ${err.detail}` };
     }
     emit({ type: "validating" });
     const parsed = schema.safeParse(parseJson(res.text));
@@ -231,6 +287,7 @@ export async function runGeminiAgent(
       return {
         kind: "guide",
         draft: parsed.data as GuideDraft,
+        model: `${researchModel} (research) + ${structureModels[sIdx]} (structuring)`,
         fetched,
         searched: searched.map((s) => s.url),
         searches,

@@ -31,7 +31,8 @@ npm run build && npm start
 |---|---|---|
 | `GEMINI_API_KEY` | One of the two keys, for live generation | **Free tier, no card** (aistudio.google.com). Uses Google Search grounding plus URL context. Server-side only. |
 | `ANTHROPIC_API_KEY` | One of the two keys, for live generation | Paid. Uses Claude web search and web fetch. Server-side only. |
-| `GEMINI_MODEL` / `ANTHROPIC_MODEL` | No | Defaults: `gemini-3.8-flash` / `claude-sonnet-5-5`. |
+| `GEMINI_MODEL` / `ANTHROPIC_MODEL` | No | Defaults: `gemini-3.8-flash` (structuring) / `claude-sonnet-5-5`. |
+| `GEMINI_RESEARCH_MODELS` | No | Comma-separated research models tried in order. Default `gemini-2.5-flash,gemini-2.5-flash-lite`, because Google's free tier includes Search grounding only for those (500 requests/day, shared). |
 | `COMPASS_PROVIDER` | No | `gemini` or `anthropic`, to force one when both keys are set (default: Anthropic, then Gemini). |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | For durable storage on serverless | Generated guides persist across deploys. Otherwise they go to `.data/guides` (local) or `/tmp` (Vercel, temporary, and the UI says so). |
 | `COMPASS_DATA_DIR` | No | Custom directory for file storage. |

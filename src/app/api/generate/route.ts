@@ -11,7 +11,7 @@ type StreamEvent =
   | { type: "done"; slug: string; cached: boolean }
   | { type: "ambiguous"; reason: string; candidates: { name: string; website: string; description: string }[] }
   | { type: "not_found"; reason: string }
-  | { type: "error"; code: string; message: string };
+  | { type: "error"; code: string; message: string; detail?: string };
 
 function json(status: number, body: object, headers: Record<string, string> = {}) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store", ...headers } });
@@ -70,7 +70,7 @@ export async function POST(req: Request) {
         if (result.kind === "guide") send({ type: "done", slug: result.slug, cached: result.cached });
         else if (result.kind === "ambiguous") send({ type: "ambiguous", ...result.report });
         else if (result.kind === "not_found") send({ type: "not_found", reason: result.reason });
-        else send({ type: "error", code: result.code, message: result.message });
+        else send({ type: "error", code: result.code, message: result.message, detail: result.detail });
       } catch (e) {
         console.error("generate failed", e instanceof Error ? e.message : "unknown");
         send({ type: "error", code: "internal", message: "Something went wrong while generating the guide." });
