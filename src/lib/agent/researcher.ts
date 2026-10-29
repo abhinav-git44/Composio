@@ -4,6 +4,7 @@ import type { ParsedQuery } from "../input";
 import { createAnthropicClient } from "./anthropic";
 import { createFixtureClient } from "./fixture";
 import { DEFAULT_GEMINI_MODEL, runGeminiAgent, type GeminiLike } from "./gemini";
+import { runSelfResearch, SELF_MODELS, type SelfResearchDeps } from "./self-research";
 import { DEFAULT_MODEL, runAgent } from "./run";
 import type { AgentEvent, AgentOutcome, ModelClient } from "./types";
 
@@ -51,14 +52,25 @@ export function geminiResearcher(ai: GeminiLike, model = process.env.GEMINI_MODE
   };
 }
 
+/**
+ * Gemini without provider-side search: the server searches and downloads pages itself.
+ * Default for Gemini because the free tier has no Search grounding on current models.
+ */
+export function geminiSelfResearcher(ai: GeminiLike, deps?: SelfResearchDeps): Researcher {
+  const models = [...new Set([process.env.GEMINI_MODEL, ...SELF_MODELS].filter((m): m is string => !!m))];
+  return { provider: "gemini", model: `${models[0]} (server-side search + fetch)`, run: (q, o) => runSelfResearch(ai, q, { ...o, models, deps }) };
+}
+
 export function getResearcher(): Researcher | null {
   switch (activeProvider()) {
     case "fixture":
       return anthropicResearcher(createFixtureClient());
     case "anthropic":
       return anthropicResearcher(createAnthropicClient(process.env.ANTHROPIC_API_KEY as string));
-    case "gemini":
-      return geminiResearcher(new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string }) as unknown as GeminiLike);
+    case "gemini": {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string }) as unknown as GeminiLike;
+      return process.env.GEMINI_RESEARCH_MODE === "grounding" ? geminiResearcher(ai) : geminiSelfResearcher(ai);
+    }
     default:
       return null;
   }

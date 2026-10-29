@@ -29,7 +29,7 @@ export default function About() {
       <section className="panel">
         <h2>How live generation works</h2>
         <ol className="claims">
-          <li>An agent (Gemini with Google Search grounding and URL context, or Claude with web search and web fetch) finds and reads the provider&apos;s official developer docs. The list of what it searched and read comes from the AI provider&apos;s own tool metadata, not from the model&apos;s text.</li>
+          <li>An agent finds and reads the provider&apos;s official developer docs. With Gemini, the server runs the searches and downloads the pages itself, with safeguards against fetching internal addresses, and Gemini reads only what was downloaded. With Claude, Claude&apos;s own web search and fetch tools do this. Either way, the record of what was searched and read comes from the system, not from the model&apos;s claims.</li>
           <li>It submits a structured guide in which every claim carries an evidence label and source IDs.</li>
           <li>
             Code then checks every citation against the pages the agent actually retrieved. Sources it never retrieved are
